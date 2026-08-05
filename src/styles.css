@@ -1,0 +1,16 @@
+.lanyard-wrapper {
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transform: scale(1);
+  transform-origin: center;
+}
+body {
+  margin: 0;
+  overflow: hidden;
+  background: #19181c;
+} /* 여백 제거 및 배경색 추가 */
