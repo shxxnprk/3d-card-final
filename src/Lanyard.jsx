@@ -1,7 +1,7 @@
 /* eslint-disable react/no-unknown-property */
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, extend, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, extend, useFrame } from "@react-three/fiber";
 import {
   useGLTF,
   useTexture,
@@ -59,75 +59,6 @@ function sendKeywordPointer(type, event) {
   );
 }
 
-/**
- * An invisible raycast surface behind the lanyard scene.
- *
- * The real card meshes stop event propagation, so this plane only receives
- * pointer events that begin on empty 3D space. Those events are forwarded to
- * the parent Imweb page, where they can drag a keyword pill behind the iframe.
- */
-function KeywordPointerPlane() {
-  const dragging = useRef(false);
-  const activePointerId = useRef(null);
-  const viewport = useThree((state) => state.viewport);
-
-  const handlePointerDown = (event) => {
-    if (event.button !== 0) return;
-
-    event.stopPropagation();
-    dragging.current = true;
-    activePointerId.current = event.pointerId;
-    event.target.setPointerCapture?.(event.pointerId);
-    sendKeywordPointer("down", event);
-  };
-
-  const handlePointerMove = (event) => {
-    if (!dragging.current || event.pointerId !== activePointerId.current) {
-      return;
-    }
-
-    event.stopPropagation();
-    sendKeywordPointer("move", event);
-  };
-
-  const finishPointer = (event) => {
-    if (!dragging.current || event.pointerId !== activePointerId.current) {
-      return;
-    }
-
-    event.stopPropagation();
-    sendKeywordPointer("up", event);
-
-    if (event.target.hasPointerCapture?.(event.pointerId)) {
-      event.target.releasePointerCapture(event.pointerId);
-    }
-
-    dragging.current = false;
-    activePointerId.current = null;
-  };
-
-  return (
-    <mesh
-      position={[0, 0, -15]}
-      scale={[viewport.width * 5, viewport.height * 5, 1]}
-      frustumCulled={false}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={finishPointer}
-      onPointerCancel={finishPointer}
-    >
-      <planeGeometry args={[1, 1]} />
-      <meshBasicMaterial
-        transparent
-        opacity={0}
-        depthWrite={false}
-        depthTest={false}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
-  );
-}
-
 // 1x1 transparent pixel — lets useTexture be called unconditionally when a
 // front/back image isn't supplied.
 const BLANK_PIXEL =
@@ -151,6 +82,12 @@ export default function Lanyard({
   lanyardImage = null,
   lanyardWidth = 1,
 }) {
+  const wrapperRef = useRef(null);
+  const interactionRef = useRef({
+    cardPointerId: null,
+    keywordPointerId: null,
+  });
+
   const [isMobile, setIsMobile] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768
   );
@@ -161,8 +98,79 @@ export default function Lanyard({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+
+    const handlePointerDown = (event) => {
+      if (event.button !== 0) return;
+
+      const pointerId = event.pointerId ?? 1;
+
+      // R3F resolves mesh handlers during the same native event. Deferring
+      // this check lets the card handler mark the pointer first.
+      queueMicrotask(() => {
+        if (
+          interactionRef.current.cardPointerId === pointerId ||
+          interactionRef.current.keywordPointerId !== null
+        ) {
+          return;
+        }
+
+        interactionRef.current.keywordPointerId = pointerId;
+        wrapper.setPointerCapture?.(pointerId);
+        sendKeywordPointer("down", event);
+      });
+    };
+
+    const handlePointerMove = (event) => {
+      const pointerId = event.pointerId ?? 1;
+      if (interactionRef.current.keywordPointerId !== pointerId) return;
+      sendKeywordPointer("move", event);
+    };
+
+    const finishPointer = (event) => {
+      const pointerId = event.pointerId ?? 1;
+
+      if (interactionRef.current.keywordPointerId === pointerId) {
+        sendKeywordPointer("up", event);
+        interactionRef.current.keywordPointerId = null;
+
+        if (wrapper.hasPointerCapture?.(pointerId)) {
+          wrapper.releasePointerCapture(pointerId);
+        }
+      }
+
+      if (interactionRef.current.cardPointerId === pointerId) {
+        interactionRef.current.cardPointerId = null;
+      }
+    };
+
+    wrapper.addEventListener("pointerdown", handlePointerDown);
+    wrapper.addEventListener("pointermove", handlePointerMove);
+    wrapper.addEventListener("pointerup", finishPointer);
+    wrapper.addEventListener("pointercancel", finishPointer);
+
+    return () => {
+      wrapper.removeEventListener("pointerdown", handlePointerDown);
+      wrapper.removeEventListener("pointermove", handlePointerMove);
+      wrapper.removeEventListener("pointerup", finishPointer);
+      wrapper.removeEventListener("pointercancel", finishPointer);
+    };
+  }, []);
+
+  const handleCardPointerDown = (pointerId) => {
+    interactionRef.current.cardPointerId = pointerId;
+  };
+
+  const handleCardPointerUp = (pointerId) => {
+    if (interactionRef.current.cardPointerId === pointerId) {
+      interactionRef.current.cardPointerId = null;
+    }
+  };
+
   return (
-    <div className="lanyard-wrapper">
+    <div className="lanyard-wrapper" ref={wrapperRef}>
       <Canvas
         camera={{ position: position, fov: fov }}
         dpr={[1, isMobile ? 1.5 : 2]}
@@ -171,7 +179,6 @@ export default function Lanyard({
           gl.setClearColor(new THREE.Color(0x000000), transparent ? 0 : 1)
         }
       >
-        <KeywordPointerPlane />
         <ambientLight intensity={Math.PI} />
         <Physics gravity={gravity} timeStep={isMobile ? 1 / 30 : 1 / 60}>
           <Band
@@ -181,6 +188,8 @@ export default function Lanyard({
             imageFit={imageFit}
             lanyardImage={lanyardImage}
             lanyardWidth={lanyardWidth}
+            onCardPointerDown={handleCardPointerDown}
+            onCardPointerUp={handleCardPointerUp}
           />
         </Physics>
         <Environment blur={0.75}>
@@ -226,6 +235,8 @@ function Band({
   imageFit = "cover",
   lanyardImage = null,
   lanyardWidth = 1,
+  onCardPointerDown = () => {},
+  onCardPointerUp = () => {},
 }) {
   const band = useRef(),
     fixed = useRef(),
@@ -382,6 +393,7 @@ function Band({
             position={[0, -1.2, -0.05]}
             onPointerUp={(e) => {
               e.stopPropagation();
+              onCardPointerUp(e.pointerId);
               if (e.target.hasPointerCapture?.(e.pointerId)) {
                 e.target.releasePointerCapture(e.pointerId);
               }
@@ -389,12 +401,18 @@ function Band({
             }}
             onPointerDown={(e) => {
               e.stopPropagation();
+              onCardPointerDown(e.pointerId);
               e.target.setPointerCapture(e.pointerId);
               drag(
                 new THREE.Vector3()
                   .copy(e.point)
                   .sub(vec.copy(card.current.translation()))
               );
+            }}
+            onPointerCancel={(e) => {
+              e.stopPropagation();
+              onCardPointerUp(e.pointerId);
+              drag(false);
             }}
           >
             <mesh geometry={nodes.card.geometry}>
