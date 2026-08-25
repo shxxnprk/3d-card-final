@@ -13,3 +13,14 @@ body {
   margin: 0;
   overflow: hidden;
 } /* 여백 제거 및 배경색 추가 */
+/*
+ * iframe 내부에서 브라우저 기본 커서를 숨깁니다.
+ */
+html,
+body,
+#root,
+.App,
+.App *,
+.App canvas {
+  cursor: none !important;
+}
