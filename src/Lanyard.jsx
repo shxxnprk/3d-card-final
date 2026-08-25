@@ -105,6 +105,10 @@ export default function Lanyard({
     const handlePointerDown = (event) => {
       if (event.button !== 0) return;
 
+      if (event.pointerType === "touch" || event.pointerType === "pen") {
+        event.preventDefault();
+      }
+
       const pointerId = event.pointerId ?? 1;
 
       // R3F resolves mesh handlers during the same native event. Deferring
@@ -126,6 +130,11 @@ export default function Lanyard({
     const handlePointerMove = (event) => {
       const pointerId = event.pointerId ?? 1;
       if (interactionRef.current.keywordPointerId !== pointerId) return;
+
+      if (event.pointerType === "touch" || event.pointerType === "pen") {
+        event.preventDefault();
+      }
+
       sendKeywordPointer("move", event);
     };
 
@@ -133,6 +142,10 @@ export default function Lanyard({
       const pointerId = event.pointerId ?? 1;
 
       if (interactionRef.current.keywordPointerId === pointerId) {
+        if (event.pointerType === "touch" || event.pointerType === "pen") {
+          event.preventDefault();
+        }
+
         sendKeywordPointer("up", event);
         interactionRef.current.keywordPointerId = null;
 
@@ -170,8 +183,18 @@ export default function Lanyard({
   };
 
   return (
-    <div className="lanyard-wrapper" ref={wrapperRef}>
+    <div
+      className="lanyard-wrapper"
+      ref={wrapperRef}
+      style={{
+        touchAction: "none",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        WebkitTouchCallout: "none",
+      }}
+    >
       <Canvas
+        style={{ touchAction: "none" }}
         camera={{ position: position, fov: fov }}
         dpr={[1, isMobile ? 1.5 : 2]}
         gl={{ alpha: transparent }}
@@ -393,6 +416,7 @@ function Band({
             position={[0, -1.2, -0.05]}
             onPointerUp={(e) => {
               e.stopPropagation();
+              e.nativeEvent?.preventDefault?.();
               onCardPointerUp(e.pointerId);
               if (e.target.hasPointerCapture?.(e.pointerId)) {
                 e.target.releasePointerCapture(e.pointerId);
@@ -401,6 +425,7 @@ function Band({
             }}
             onPointerDown={(e) => {
               e.stopPropagation();
+              e.nativeEvent?.preventDefault?.();
               onCardPointerDown(e.pointerId);
               e.target.setPointerCapture(e.pointerId);
               drag(
@@ -411,6 +436,7 @@ function Band({
             }}
             onPointerCancel={(e) => {
               e.stopPropagation();
+              e.nativeEvent?.preventDefault?.();
               onCardPointerUp(e.pointerId);
               drag(false);
             }}
