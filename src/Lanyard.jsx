@@ -1,7 +1,7 @@
 /* eslint-disable react/no-unknown-property */
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, extend, useFrame } from "@react-three/fiber";
+import { Canvas, extend, useFrame, useThree } from "@react-three/fiber";
 import {
   useGLTF,
   useTexture,
@@ -26,6 +26,107 @@ import * as THREE from "three";
 import "./Lanyard.css";
 
 extend({ MeshLineGeometry, MeshLineMaterial });
+
+const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
+
+function getParentOrigin() {
+  if (typeof document === "undefined" || !document.referrer) return "*";
+
+  try {
+    return new URL(document.referrer).origin;
+  } catch {
+    return "*";
+  }
+}
+
+function sendKeywordPointer(type, event) {
+  if (typeof window === "undefined" || window.parent === window) return;
+
+  const nativeEvent = event?.nativeEvent || event;
+
+  window.parent.postMessage(
+    {
+      channel: KEYWORD_BRIDGE_CHANNEL,
+      type,
+      x: nativeEvent?.clientX ?? 0,
+      y: nativeEvent?.clientY ?? 0,
+      pointerId: nativeEvent?.pointerId ?? 1,
+      pointerType: nativeEvent?.pointerType ?? "mouse",
+      button: nativeEvent?.button ?? 0,
+      buttons: nativeEvent?.buttons ?? 0,
+    },
+    getParentOrigin()
+  );
+}
+
+/**
+ * An invisible raycast surface behind the lanyard scene.
+ *
+ * The real card meshes stop event propagation, so this plane only receives
+ * pointer events that begin on empty 3D space. Those events are forwarded to
+ * the parent Imweb page, where they can drag a keyword pill behind the iframe.
+ */
+function KeywordPointerPlane() {
+  const dragging = useRef(false);
+  const activePointerId = useRef(null);
+  const viewport = useThree((state) => state.viewport);
+
+  const handlePointerDown = (event) => {
+    if (event.button !== 0) return;
+
+    event.stopPropagation();
+    dragging.current = true;
+    activePointerId.current = event.pointerId;
+    event.target.setPointerCapture?.(event.pointerId);
+    sendKeywordPointer("down", event);
+  };
+
+  const handlePointerMove = (event) => {
+    if (!dragging.current || event.pointerId !== activePointerId.current) {
+      return;
+    }
+
+    event.stopPropagation();
+    sendKeywordPointer("move", event);
+  };
+
+  const finishPointer = (event) => {
+    if (!dragging.current || event.pointerId !== activePointerId.current) {
+      return;
+    }
+
+    event.stopPropagation();
+    sendKeywordPointer("up", event);
+
+    if (event.target.hasPointerCapture?.(event.pointerId)) {
+      event.target.releasePointerCapture(event.pointerId);
+    }
+
+    dragging.current = false;
+    activePointerId.current = null;
+  };
+
+  return (
+    <mesh
+      position={[0, 0, -15]}
+      scale={[viewport.width * 5, viewport.height * 5, 1]}
+      frustumCulled={false}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishPointer}
+      onPointerCancel={finishPointer}
+    >
+      <planeGeometry args={[1, 1]} />
+      <meshBasicMaterial
+        transparent
+        opacity={0}
+        depthWrite={false}
+        depthTest={false}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+}
 
 // 1x1 transparent pixel — lets useTexture be called unconditionally when a
 // front/back image isn't supplied.
@@ -70,6 +171,7 @@ export default function Lanyard({
           gl.setClearColor(new THREE.Color(0x000000), transparent ? 0 : 1)
         }
       >
+        <KeywordPointerPlane />
         <ambientLight intensity={Math.PI} />
         <Physics gravity={gravity} timeStep={isMobile ? 1 / 30 : 1 / 60}>
           <Band
@@ -205,7 +307,6 @@ function Band({
       ])
   );
   const [dragged, drag] = useState(false);
-  const [hovered, hover] = useState(false);
 
   useRopeJoint(fixed, j1, [[0, 0, 0], [0, 0, 0], 1]);
   useRopeJoint(j1, j2, [[0, 0, 0], [0, 0, 0], 1]);
@@ -214,13 +315,6 @@ function Band({
     [0, 0, 0],
     [0, 1.5, 0],
   ]);
-
-  useEffect(() => {
-    if (hovered) {
-      document.body.style.cursor = dragged ? "grabbing" : "grab";
-      return () => void (document.body.style.cursor = "auto");
-    }
-  }, [hovered, dragged]);
 
   useFrame((state, delta) => {
     if (dragged) {
@@ -286,19 +380,22 @@ function Band({
           <group
             scale={2.25}
             position={[0, -1.2, -0.05]}
-            onPointerOver={() => hover(true)}
-            onPointerOut={() => hover(false)}
-            onPointerUp={(e) => (
-              e.target.releasePointerCapture(e.pointerId), drag(false)
-            )}
-            onPointerDown={(e) => (
-              e.target.setPointerCapture(e.pointerId),
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              if (e.target.hasPointerCapture?.(e.pointerId)) {
+                e.target.releasePointerCapture(e.pointerId);
+              }
+              drag(false);
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              e.target.setPointerCapture(e.pointerId);
               drag(
                 new THREE.Vector3()
                   .copy(e.point)
                   .sub(vec.copy(card.current.translation()))
-              )
-            )}
+              );
+            }}
           >
             <mesh geometry={nodes.card.geometry}>
               <meshPhysicalMaterial
