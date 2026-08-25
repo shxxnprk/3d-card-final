@@ -139,7 +139,7 @@ export default function App() {
         position={[0, 0, 20]}
         gravity={[0, -40, 0]}
         frontImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/e99a6579ef617.png"
-        backImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/e02e35112a929.png.png"
+        backImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/e02e35112a929.png"
         lanyardImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/2d0e4c011a3bc.png"
         lanyardWidth={1.2}
         imageFit="cover"
