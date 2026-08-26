@@ -67,7 +67,8 @@ const BLANK_PIXEL =
 // The card model's front face is UV-mapped to the LEFT half of the texture
 // atlas and the back face to the RIGHT half (measured from card.glb). Each
 // custom image is composited into its own half so the two faces render
-// independently, aspect-preserving (no stretching).
+// independently. The atlas rectangles are narrower than the physical card,
+// so the drawing step below compensates for that UV-to-mesh transformation.
 const FRONT_UV_RECT = { x: 0, y: 0, w: 0.5, h: 0.755 };
 const BACK_UV_RECT = { x: 0.5, y: 0, w: 0.5, h: 0.757 };
 
@@ -81,6 +82,7 @@ export default function Lanyard({
   imageFit = "cover",
   lanyardImage = null,
   lanyardWidth = 1,
+  lanyardRepeat = 1.5,
 }) {
   const wrapperRef = useRef(null);
   const interactionRef = useRef({
@@ -211,6 +213,7 @@ export default function Lanyard({
             imageFit={imageFit}
             lanyardImage={lanyardImage}
             lanyardWidth={lanyardWidth}
+            lanyardRepeat={lanyardRepeat}
             onCardPointerDown={handleCardPointerDown}
             onCardPointerUp={handleCardPointerUp}
           />
@@ -258,6 +261,7 @@ function Band({
   imageFit = "cover",
   lanyardImage = null,
   lanyardWidth = 1,
+  lanyardRepeat = 1.5,
   onCardPointerDown = () => {},
   onCardPointerUp = () => {},
 }) {
@@ -285,8 +289,23 @@ function Band({
   const frontTex = useTexture(frontImage || BLANK_PIXEL);
   const backTex = useTexture(backImage || BLANK_PIXEL);
 
+  // The card mesh is slightly wider than its UV rectangle. Using the mesh's
+  // actual aspect ratio lets us pre-compensate the atlas drawing so portraits,
+  // lettering, and circles keep their original proportions on the final card.
+  const cardAspect = useMemo(() => {
+    const geometry = nodes.card.geometry;
+    geometry.computeBoundingBox();
+
+    if (!geometry.boundingBox) return 0.7164;
+
+    const size = new THREE.Vector3();
+    geometry.boundingBox.getSize(size);
+    return size.y ? size.x / size.y : 0.7164;
+  }, [nodes.card.geometry]);
+
   // Composite the front/back images into the card's texture atlas (front = left
-  // half, back = right half). Each image is drawn aspect-preserving (no stretch).
+  // half, back = right half). Cropping/letterboxing is calculated against the
+  // physical card, then pre-warped into the atlas so the mesh unwarps it again.
   const cardMap = useMemo(() => {
     const baseMap = materials.base.map;
     if (!frontImage && !backImage) return baseMap;
@@ -302,27 +321,55 @@ function Band({
     // Keep the original baked atlas for the card edges and any untouched face.
     ctx.drawImage(baseImg, 0, 0, W, H);
 
-    const drawFitted = (img, rect) => {
+    const drawMapped = (img, rect) => {
       const rx = rect.x * W;
       const ry = rect.y * H;
       const rw = rect.w * W;
       const rh = rect.h * H;
-      const pick = imageFit === "contain" ? Math.min : Math.max;
-      const scale = pick(rw / img.width, rh / img.height);
-      const dw = img.width * scale;
-      const dh = img.height * scale;
-      const dx = rx + (rw - dw) / 2;
-      const dy = ry + (rh - dh) / 2;
+      const sourceAspect = img.width / img.height;
+
       ctx.save();
       ctx.beginPath();
       ctx.rect(rx, ry, rw, rh);
       ctx.clip();
-      ctx.drawImage(img, dx, dy, dw, dh);
+
+      if (imageFit === "contain") {
+        let dx = rx;
+        let dy = ry;
+        let dw = rw;
+        let dh = rh;
+
+        if (sourceAspect > cardAspect) {
+          dh = rh * (cardAspect / sourceAspect);
+          dy += (rh - dh) / 2;
+        } else {
+          dw = rw * (sourceAspect / cardAspect);
+          dx += (rw - dw) / 2;
+        }
+
+        ctx.drawImage(img, dx, dy, dw, dh);
+      } else {
+        let sx = 0;
+        let sy = 0;
+        let sw = img.width;
+        let sh = img.height;
+
+        if (sourceAspect > cardAspect) {
+          sw = sh * cardAspect;
+          sx = (img.width - sw) / 2;
+        } else {
+          sh = sw / cardAspect;
+          sy = (img.height - sh) / 2;
+        }
+
+        ctx.drawImage(img, sx, sy, sw, sh, rx, ry, rw, rh);
+      }
+
       ctx.restore();
     };
 
-    if (frontImage && frontTex.image) drawFitted(frontTex.image, FRONT_UV_RECT);
-    if (backImage && backTex.image) drawFitted(backTex.image, BACK_UV_RECT);
+    if (frontImage && frontTex.image) drawMapped(frontTex.image, FRONT_UV_RECT);
+    if (backImage && backTex.image) drawMapped(backTex.image, BACK_UV_RECT);
 
     const composite = new THREE.CanvasTexture(canvas);
     composite.colorSpace = THREE.SRGBColorSpace;
@@ -330,7 +377,15 @@ function Band({
     composite.anisotropy = 16;
     composite.needsUpdate = true;
     return composite;
-  }, [frontImage, backImage, imageFit, frontTex, backTex, materials.base.map]);
+  }, [
+    frontImage,
+    backImage,
+    imageFit,
+    frontTex,
+    backTex,
+    materials.base.map,
+    cardAspect,
+  ]);
   const [curve] = useState(
     () =>
       new THREE.CatmullRomCurve3([
@@ -468,7 +523,7 @@ function Band({
           resolution={isMobile ? [1000, 2000] : [1000, 1000]}
           useMap
           map={texture}
-          repeat={[-4, 1]}
+          repeat={[-lanyardRepeat, 1]}
           lineWidth={lanyardWidth}
         />
       </mesh>
