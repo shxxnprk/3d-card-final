@@ -28,7 +28,6 @@ import "./Lanyard.css";
 extend({ MeshLineGeometry, MeshLineMaterial });
 
 const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
-const MAX_CARD_REACH = 4.25;
 const MAX_DRAG_STEP = 0.3;
 
 function getParentOrigin() {
@@ -429,14 +428,6 @@ function Band({
         anchorPosition.copy(fixed.current.translation());
         dragTarget.copy(pointerWorld).sub(dragged);
         dragTarget.z = anchorPosition.z;
-
-        // A kinematic card can otherwise be pulled farther than the three rope
-        // joints can reach, causing the solver to eject the intermediate bodies.
-        movement.copy(dragTarget).sub(anchorPosition);
-        if (movement.length() > MAX_CARD_REACH) {
-          movement.setLength(MAX_CARD_REACH);
-          dragTarget.copy(anchorPosition).add(movement);
-        }
 
         // Move in bounded steps rather than teleporting the card every frame.
         // This keeps fast mouse/touch gestures stable at both 30 and 60 fps.
