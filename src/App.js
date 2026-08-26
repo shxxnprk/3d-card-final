@@ -142,6 +142,7 @@ export default function App() {
         backImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/581f0f183310e.png"
         lanyardImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/6da23efc2c45b.png"
         lanyardWidth={1.2}
+        lanyardRepeat={1.5}
         imageFit="cover"
       />
     </div>
