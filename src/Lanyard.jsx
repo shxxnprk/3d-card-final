@@ -28,6 +28,8 @@ import "./Lanyard.css";
 extend({ MeshLineGeometry, MeshLineMaterial });
 
 const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
+const MAX_CARD_REACH = 4.25;
+const MAX_DRAG_STEP = 0.3;
 
 function getParentOrigin() {
   if (typeof document === "undefined" || !document.referrer) return "*";
@@ -82,7 +84,7 @@ export default function Lanyard({
   imageFit = "cover",
   lanyardImage = null,
   lanyardWidth = 1,
-  lanyardRepeat = 1.5,
+  lanyardRepeat = 2,
 }) {
   const wrapperRef = useRef(null);
   const interactionRef = useRef({
@@ -205,7 +207,7 @@ export default function Lanyard({
         }
       >
         <ambientLight intensity={Math.PI} />
-        <Physics gravity={gravity} timeStep={isMobile ? 1 / 30 : 1 / 60}>
+        <Physics gravity={gravity} timeStep={1 / 60}>
           <Band
             isMobile={isMobile}
             frontImage={frontImage}
@@ -261,7 +263,7 @@ function Band({
   imageFit = "cover",
   lanyardImage = null,
   lanyardWidth = 1,
-  lanyardRepeat = 1.5,
+  lanyardRepeat = 2,
   onCardPointerDown = () => {},
   onCardPointerUp = () => {},
 }) {
@@ -273,12 +275,23 @@ function Band({
     card = useRef();
   const vec = new THREE.Vector3(),
     ang = new THREE.Vector3(),
-    rot = new THREE.Vector3(),
-    dir = new THREE.Vector3();
+    rot = new THREE.Vector3();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const dragPlane = useMemo(
+    () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0),
+    []
+  );
+  const pointerWorld = useMemo(() => new THREE.Vector3(), []);
+  const dragTarget = useMemo(() => new THREE.Vector3(), []);
+  const anchorPosition = useMemo(() => new THREE.Vector3(), []);
+  const currentPosition = useMemo(() => new THREE.Vector3(), []);
+  const movement = useMemo(() => new THREE.Vector3(), []);
   const segmentProps = {
     type: "dynamic",
     canSleep: true,
     colliders: false,
+    ccd: true,
+    additionalSolverIterations: 4,
     angularDamping: 4,
     linearDamping: 4,
   };
@@ -406,16 +419,43 @@ function Band({
   ]);
 
   useFrame((state, delta) => {
-    if (dragged) {
-      vec.set(state.pointer.x, state.pointer.y, 0.5).unproject(state.camera);
-      dir.copy(vec).sub(state.camera.position).normalize();
-      vec.add(dir.multiplyScalar(state.camera.position.length()));
+    if (dragged && card.current && fixed.current) {
+      // Intersect the pointer with the same Z plane as the rope instead of
+      // extrapolating from the camera. This prevents large coordinate jumps
+      // near the viewport edges.
+      raycaster.setFromCamera(state.pointer, state.camera);
+
+      if (raycaster.ray.intersectPlane(dragPlane, pointerWorld)) {
+        anchorPosition.copy(fixed.current.translation());
+        dragTarget.copy(pointerWorld).sub(dragged);
+        dragTarget.z = anchorPosition.z;
+
+        // A kinematic card can otherwise be pulled farther than the three rope
+        // joints can reach, causing the solver to eject the intermediate bodies.
+        movement.copy(dragTarget).sub(anchorPosition);
+        if (movement.length() > MAX_CARD_REACH) {
+          movement.setLength(MAX_CARD_REACH);
+          dragTarget.copy(anchorPosition).add(movement);
+        }
+
+        // Move in bounded steps rather than teleporting the card every frame.
+        // This keeps fast mouse/touch gestures stable at both 30 and 60 fps.
+        currentPosition.copy(card.current.translation());
+        movement.copy(dragTarget).sub(currentPosition);
+        const maxStep = Math.min(
+          MAX_DRAG_STEP,
+          Math.max(0.08, delta * 10)
+        );
+
+        if (movement.length() > maxStep) {
+          movement.setLength(maxStep);
+        }
+
+        currentPosition.add(movement);
+        card.current.setNextKinematicTranslation(currentPosition);
+      }
+
       [card, j1, j2, j3, fixed].forEach((ref) => ref.current?.wakeUp());
-      card.current?.setNextKinematicTranslation({
-        x: vec.x - dragged.x,
-        y: vec.y - dragged.y,
-        z: vec.z - dragged.z,
-      });
     }
     if (fixed.current) {
       [j1, j2].forEach((ref) => {
@@ -445,6 +485,12 @@ function Band({
 
   curve.curveType = "chordal";
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  // Keep MeshLine's repeat count on a stable whole-number tile boundary.
+  // App code that still passes 1.5 is normalized to 2 automatically.
+  const stableLanyardRepeat = Math.max(
+    1,
+    Math.round(Number(lanyardRepeat) || 2)
+  );
 
   return (
     <>
@@ -473,6 +519,8 @@ function Band({
               e.stopPropagation();
               e.nativeEvent?.preventDefault?.();
               onCardPointerUp(e.pointerId);
+              card.current?.setLinvel({ x: 0, y: 0, z: 0 }, true);
+              card.current?.setAngvel({ x: 0, y: 0, z: 0 }, true);
               if (e.target.hasPointerCapture?.(e.pointerId)) {
                 e.target.releasePointerCapture(e.pointerId);
               }
@@ -493,6 +541,8 @@ function Band({
               e.stopPropagation();
               e.nativeEvent?.preventDefault?.();
               onCardPointerUp(e.pointerId);
+              card.current?.setLinvel({ x: 0, y: 0, z: 0 }, true);
+              card.current?.setAngvel({ x: 0, y: 0, z: 0 }, true);
               drag(false);
             }}
           >
@@ -523,7 +573,7 @@ function Band({
           resolution={isMobile ? [1000, 2000] : [1000, 1000]}
           useMap
           map={texture}
-          repeat={[-lanyardRepeat, 1]}
+          repeat={[-stableLanyardRepeat, 1]}
           lineWidth={lanyardWidth}
         />
       </mesh>
