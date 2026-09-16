@@ -138,9 +138,9 @@ export default function App() {
       <Lanyard
         position={[0, 0, 20]}
         gravity={[0, -40, 0]}
-        frontImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/924581a83be99.png"
-        backImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/581f0f183310e.png"
-        lanyardImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/6da23efc2c45b.png"
+        frontImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/fc6bc8901466c.png"
+        backImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/7bc826ef39082.png"
+        lanyardImage="https://cdn.imweb.me/upload/S2026072479051d98f7a2d/402c3f4d44b9e.png"
         lanyardWidth={1.2}
         lanyardRepeat={2}
         imageFit="cover"
