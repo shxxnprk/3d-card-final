@@ -1,4 +1,5 @@
 /* eslint-disable react/no-unknown-property */
+// BUILD: LANYARD-PAGE-CURSOR-MODE-V3 / 2026-09-16
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, extend, useFrame } from "@react-three/fiber";
@@ -28,6 +29,9 @@ import "./Lanyard.css";
 extend({ MeshLineGeometry, MeshLineMaterial });
 
 const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
+const CURSOR_BRIDGE_CHANNEL = "IMWEB_CURSOR_BRIDGE";
+const CURSOR_BRIDGE_QUERY = "imwebCursor";
+const CURSOR_BRIDGE_VALUE = "common";
 const MAX_DRAG_STEP = 0.3;
 
 function getParentOrigin() {
@@ -48,6 +52,45 @@ function sendKeywordPointer(type, event) {
   window.parent.postMessage(
     {
       channel: KEYWORD_BRIDGE_CHANNEL,
+      type,
+      x: nativeEvent?.clientX ?? 0,
+      y: nativeEvent?.clientY ?? 0,
+      pointerId: nativeEvent?.pointerId ?? 1,
+      pointerType: nativeEvent?.pointerType ?? "mouse",
+      button: nativeEvent?.button ?? 0,
+      buttons: nativeEvent?.buttons ?? 0,
+    },
+    getParentOrigin()
+  );
+}
+
+function sendCursorPointer(type, event) {
+  if (typeof window === "undefined" || window.parent === window) return;
+
+  /*
+   * About는 ?imwebCursor=common으로 공통 커서 모드를 사용합니다.
+   * 쿼리가 없는 기존 Contact iframe은 contact 모드로 유지됩니다.
+   */
+  const cursorMode =
+    new URLSearchParams(window.location.search).get(CURSOR_BRIDGE_QUERY) ===
+    CURSOR_BRIDGE_VALUE
+      ? "common"
+      : "contact";
+
+  const nativeEvent = event?.nativeEvent || event;
+
+  /* 커스텀 커서는 마우스 입력에서만 부모 페이지로 전달합니다. */
+  if (
+    nativeEvent?.pointerType &&
+    nativeEvent.pointerType !== "mouse"
+  ) {
+    return;
+  }
+
+  window.parent.postMessage(
+    {
+      channel: CURSOR_BRIDGE_CHANNEL,
+      cursorMode,
       type,
       x: nativeEvent?.clientX ?? 0,
       y: nativeEvent?.clientY ?? 0,
@@ -108,6 +151,8 @@ export default function Lanyard({
     const handlePointerDown = (event) => {
       if (event.button !== 0) return;
 
+      sendCursorPointer("down", event);
+
       if (event.pointerType === "touch" || event.pointerType === "pen") {
         event.preventDefault();
       }
@@ -131,6 +176,9 @@ export default function Lanyard({
     };
 
     const handlePointerMove = (event) => {
+      /* 드래그 여부와 관계없이 iframe 안의 마우스 좌표를 항상 전달합니다. */
+      sendCursorPointer("move", event);
+
       const pointerId = event.pointerId ?? 1;
       if (interactionRef.current.keywordPointerId !== pointerId) return;
 
@@ -142,6 +190,8 @@ export default function Lanyard({
     };
 
     const finishPointer = (event) => {
+      sendCursorPointer("up", event);
+
       const pointerId = event.pointerId ?? 1;
 
       if (interactionRef.current.keywordPointerId === pointerId) {
@@ -162,16 +212,28 @@ export default function Lanyard({
       }
     };
 
+    const handlePointerEnter = (event) => {
+      sendCursorPointer("move", event);
+    };
+
+    const handlePointerLeave = (event) => {
+      sendCursorPointer("leave", event);
+    };
+
     wrapper.addEventListener("pointerdown", handlePointerDown);
     wrapper.addEventListener("pointermove", handlePointerMove);
     wrapper.addEventListener("pointerup", finishPointer);
     wrapper.addEventListener("pointercancel", finishPointer);
+    wrapper.addEventListener("pointerenter", handlePointerEnter);
+    wrapper.addEventListener("pointerleave", handlePointerLeave);
 
     return () => {
       wrapper.removeEventListener("pointerdown", handlePointerDown);
       wrapper.removeEventListener("pointermove", handlePointerMove);
       wrapper.removeEventListener("pointerup", finishPointer);
       wrapper.removeEventListener("pointercancel", finishPointer);
+      wrapper.removeEventListener("pointerenter", handlePointerEnter);
+      wrapper.removeEventListener("pointerleave", handlePointerLeave);
     };
   }, []);
 
@@ -191,13 +253,14 @@ export default function Lanyard({
       ref={wrapperRef}
       style={{
         touchAction: "none",
+        cursor: "none",
         userSelect: "none",
         WebkitUserSelect: "none",
         WebkitTouchCallout: "none",
       }}
     >
       <Canvas
-        style={{ touchAction: "none" }}
+        style={{ touchAction: "none", cursor: "none" }}
         camera={{ position: position, fov: fov }}
         dpr={[1, isMobile ? 1.5 : 2]}
         gl={{ alpha: transparent }}
