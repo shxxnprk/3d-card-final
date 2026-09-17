@@ -1,5 +1,5 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-WINDOW-CURSOR-BRIDGE-V4 / 2026-09-17
+// BUILD: LANYARD-WINDOW-CURSOR-BRIDGE-V5 / 2026-09-18
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, extend, useFrame } from "@react-three/fiber";
@@ -34,14 +34,55 @@ const CURSOR_BRIDGE_QUERY = "imwebCursor";
 const CURSOR_BRIDGE_VALUE = "common";
 const MAX_DRAG_STEP = 0.3;
 
+let cachedParentOrigin;
+let cachedCursorMode;
+
 function getParentOrigin() {
+  if (cachedParentOrigin !== undefined) return cachedParentOrigin;
+
   if (typeof document === "undefined" || !document.referrer) return "*";
 
   try {
-    return new URL(document.referrer).origin;
+    cachedParentOrigin = new URL(document.referrer).origin;
   } catch {
-    return "*";
+    cachedParentOrigin = "*";
   }
+
+  return cachedParentOrigin;
+}
+
+function getCursorMode() {
+  if (cachedCursorMode !== undefined) return cachedCursorMode;
+
+  cachedCursorMode =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get(CURSOR_BRIDGE_QUERY) ===
+      CURSOR_BRIDGE_VALUE
+      ? "common"
+      : "contact";
+
+  return cachedCursorMode;
+}
+
+function getCursorPointerSnapshot(event) {
+  const nativeEvent = event?.nativeEvent || event;
+  let sample = nativeEvent;
+
+  if (typeof nativeEvent?.getCoalescedEvents === "function") {
+    const coalescedEvents = nativeEvent.getCoalescedEvents();
+    if (coalescedEvents.length) {
+      sample = coalescedEvents[coalescedEvents.length - 1];
+    }
+  }
+
+  return {
+    clientX: sample?.clientX ?? nativeEvent?.clientX ?? 0,
+    clientY: sample?.clientY ?? nativeEvent?.clientY ?? 0,
+    pointerId: sample?.pointerId ?? nativeEvent?.pointerId ?? 1,
+    pointerType: sample?.pointerType ?? nativeEvent?.pointerType ?? "mouse",
+    button: sample?.button ?? nativeEvent?.button ?? 0,
+    buttons: sample?.buttons ?? nativeEvent?.buttons ?? 0,
+  };
 }
 
 function sendKeywordPointer(type, event) {
@@ -71,18 +112,13 @@ function sendCursorPointer(type, event) {
    * About는 ?imwebCursor=common으로 공통 커서 모드를 사용합니다.
    * 쿼리가 없는 기존 Contact iframe은 contact 모드로 유지됩니다.
    */
-  const cursorMode =
-    new URLSearchParams(window.location.search).get(CURSOR_BRIDGE_QUERY) ===
-    CURSOR_BRIDGE_VALUE
-      ? "common"
-      : "contact";
-
-  const nativeEvent = event?.nativeEvent || event;
+  const cursorMode = getCursorMode();
+  const pointer = getCursorPointerSnapshot(event);
 
   /* 커스텀 커서는 마우스 입력에서만 부모 페이지로 전달합니다. */
   if (
-    nativeEvent?.pointerType &&
-    nativeEvent.pointerType !== "mouse"
+    pointer.pointerType &&
+    pointer.pointerType !== "mouse"
   ) {
     return;
   }
@@ -92,12 +128,12 @@ function sendCursorPointer(type, event) {
       channel: CURSOR_BRIDGE_CHANNEL,
       cursorMode,
       type,
-      x: nativeEvent?.clientX ?? 0,
-      y: nativeEvent?.clientY ?? 0,
-      pointerId: nativeEvent?.pointerId ?? 1,
-      pointerType: nativeEvent?.pointerType ?? "mouse",
-      button: nativeEvent?.button ?? 0,
-      buttons: nativeEvent?.buttons ?? 0,
+      x: pointer.clientX,
+      y: pointer.clientY,
+      pointerId: pointer.pointerId,
+      pointerType: pointer.pointerType,
+      button: pointer.button,
+      buttons: pointer.buttons,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
     },
@@ -153,24 +189,69 @@ export default function Lanyard({
    */
   useEffect(() => {
     const root = document.documentElement;
+    let cursorMoveFrame = 0;
+    let pendingCursorMove = null;
+
+    const cancelPendingCursorMove = () => {
+      if (cursorMoveFrame) {
+        window.cancelAnimationFrame(cursorMoveFrame);
+        cursorMoveFrame = 0;
+      }
+
+      pendingCursorMove = null;
+    };
+
+    const flushCursorMove = () => {
+      cursorMoveFrame = 0;
+
+      if (!pendingCursorMove) return;
+
+      const pointer = pendingCursorMove;
+      pendingCursorMove = null;
+      sendCursorPointer("move", pointer);
+    };
+
+    const queueCursorMove = (event) => {
+      const pointer = getCursorPointerSnapshot(event);
+      if (pointer.pointerType !== "mouse") return;
+
+      /*
+       * 고주사율 마우스의 수백 개 pointermove를 그대로 postMessage하지 않고
+       * 현재 화면 프레임에 필요한 가장 최신 좌표 하나만 부모로 보냅니다.
+       */
+      pendingCursorMove = pointer;
+
+      if (!cursorMoveFrame) {
+        cursorMoveFrame = window.requestAnimationFrame(flushCursorMove);
+      }
+    };
+
+    const sendCursorImmediately = (type, event) => {
+      const pointer = getCursorPointerSnapshot(event);
+      if (pointer.pointerType !== "mouse") return;
+
+      cancelPendingCursorMove();
+      sendCursorPointer(type, pointer);
+    };
 
     const handleCursorMove = (event) => {
-      sendCursorPointer("move", event);
+      queueCursorMove(event);
     };
 
     const handleCursorDown = (event) => {
-      sendCursorPointer("down", event);
+      sendCursorImmediately("down", event);
     };
 
     const handleCursorUp = (event) => {
-      sendCursorPointer("up", event);
+      sendCursorImmediately("up", event);
     };
 
     const handleCursorEnter = (event) => {
-      sendCursorPointer("move", event);
+      queueCursorMove(event);
     };
 
     const handleCursorLeave = (event) => {
+      cancelPendingCursorMove();
       sendCursorPointer("leave", event);
     };
 
@@ -183,6 +264,7 @@ export default function Lanyard({
     window.addEventListener("blur", handleCursorLeave);
 
     return () => {
+      cancelPendingCursorMove();
       window.removeEventListener("pointermove", handleCursorMove, true);
       window.removeEventListener("pointerdown", handleCursorDown, true);
       window.removeEventListener("pointerup", handleCursorUp, true);
