@@ -1,5 +1,5 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-PAGE-CURSOR-MODE-V3 / 2026-09-16
+// BUILD: LANYARD-WINDOW-CURSOR-BRIDGE-V4 / 2026-09-17
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, extend, useFrame } from "@react-three/fiber";
@@ -98,6 +98,8 @@ function sendCursorPointer(type, event) {
       pointerType: nativeEvent?.pointerType ?? "mouse",
       button: nativeEvent?.button ?? 0,
       buttons: nativeEvent?.buttons ?? 0,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
     },
     getParentOrigin()
   );
@@ -144,14 +146,59 @@ export default function Lanyard({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  /*
+   * Canvas/R3F가 이벤트 전파를 처리하더라도 커서 좌표가 끊기지 않도록
+   * iframe window의 capture 단계에서 커서 이벤트를 수집합니다.
+   * Contact와 About은 같은 메시지를 받고 부모 페이지에서 각자 커서를 선택합니다.
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+
+    const handleCursorMove = (event) => {
+      sendCursorPointer("move", event);
+    };
+
+    const handleCursorDown = (event) => {
+      sendCursorPointer("down", event);
+    };
+
+    const handleCursorUp = (event) => {
+      sendCursorPointer("up", event);
+    };
+
+    const handleCursorEnter = (event) => {
+      sendCursorPointer("move", event);
+    };
+
+    const handleCursorLeave = (event) => {
+      sendCursorPointer("leave", event);
+    };
+
+    window.addEventListener("pointermove", handleCursorMove, true);
+    window.addEventListener("pointerdown", handleCursorDown, true);
+    window.addEventListener("pointerup", handleCursorUp, true);
+    window.addEventListener("pointercancel", handleCursorUp, true);
+    root.addEventListener("pointerenter", handleCursorEnter, true);
+    root.addEventListener("pointerleave", handleCursorLeave, true);
+    window.addEventListener("blur", handleCursorLeave);
+
+    return () => {
+      window.removeEventListener("pointermove", handleCursorMove, true);
+      window.removeEventListener("pointerdown", handleCursorDown, true);
+      window.removeEventListener("pointerup", handleCursorUp, true);
+      window.removeEventListener("pointercancel", handleCursorUp, true);
+      root.removeEventListener("pointerenter", handleCursorEnter, true);
+      root.removeEventListener("pointerleave", handleCursorLeave, true);
+      window.removeEventListener("blur", handleCursorLeave);
+    };
+  }, []);
+
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
 
     const handlePointerDown = (event) => {
       if (event.button !== 0) return;
-
-      sendCursorPointer("down", event);
 
       if (event.pointerType === "touch" || event.pointerType === "pen") {
         event.preventDefault();
@@ -176,9 +223,6 @@ export default function Lanyard({
     };
 
     const handlePointerMove = (event) => {
-      /* 드래그 여부와 관계없이 iframe 안의 마우스 좌표를 항상 전달합니다. */
-      sendCursorPointer("move", event);
-
       const pointerId = event.pointerId ?? 1;
       if (interactionRef.current.keywordPointerId !== pointerId) return;
 
@@ -190,8 +234,6 @@ export default function Lanyard({
     };
 
     const finishPointer = (event) => {
-      sendCursorPointer("up", event);
-
       const pointerId = event.pointerId ?? 1;
 
       if (interactionRef.current.keywordPointerId === pointerId) {
@@ -212,28 +254,16 @@ export default function Lanyard({
       }
     };
 
-    const handlePointerEnter = (event) => {
-      sendCursorPointer("move", event);
-    };
-
-    const handlePointerLeave = (event) => {
-      sendCursorPointer("leave", event);
-    };
-
     wrapper.addEventListener("pointerdown", handlePointerDown);
     wrapper.addEventListener("pointermove", handlePointerMove);
     wrapper.addEventListener("pointerup", finishPointer);
     wrapper.addEventListener("pointercancel", finishPointer);
-    wrapper.addEventListener("pointerenter", handlePointerEnter);
-    wrapper.addEventListener("pointerleave", handlePointerLeave);
 
     return () => {
       wrapper.removeEventListener("pointerdown", handlePointerDown);
       wrapper.removeEventListener("pointermove", handlePointerMove);
       wrapper.removeEventListener("pointerup", finishPointer);
       wrapper.removeEventListener("pointercancel", finishPointer);
-      wrapper.removeEventListener("pointerenter", handlePointerEnter);
-      wrapper.removeEventListener("pointerleave", handlePointerLeave);
     };
   }, []);
 
