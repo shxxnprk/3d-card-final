@@ -1,5 +1,5 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-WINDOW-CURSOR-BRIDGE-V4 / 2026-09-17
+// BUILD: LANYARD-RAF-CURSOR-BRIDGE-V5 / 2026-09-18
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, extend, useFrame } from "@react-three/fiber";
@@ -64,6 +64,32 @@ function sendKeywordPointer(type, event) {
   );
 }
 
+function getCursorPointerSnapshot(event) {
+  const nativeEvent = event?.nativeEvent || event;
+  let sample = nativeEvent;
+
+  /*
+   * 고주사율 마우스는 한 번의 pointermove에 여러 좌표를 묶어 줄 수 있습니다.
+   * 커서는 중간 좌표를 모두 보낼 필요가 없으므로 가장 최신 좌표만 사용합니다.
+   */
+  if (typeof nativeEvent?.getCoalescedEvents === "function") {
+    const coalescedEvents = nativeEvent.getCoalescedEvents();
+    if (coalescedEvents.length > 0) {
+      sample = coalescedEvents[coalescedEvents.length - 1];
+    }
+  }
+
+  return {
+    clientX: sample?.clientX ?? nativeEvent?.clientX ?? 0,
+    clientY: sample?.clientY ?? nativeEvent?.clientY ?? 0,
+    pointerId: sample?.pointerId ?? nativeEvent?.pointerId ?? 1,
+    pointerType:
+      sample?.pointerType ?? nativeEvent?.pointerType ?? "mouse",
+    button: sample?.button ?? nativeEvent?.button ?? 0,
+    buttons: sample?.buttons ?? nativeEvent?.buttons ?? 0,
+  };
+}
+
 function sendCursorPointer(type, event) {
   if (typeof window === "undefined" || window.parent === window) return;
 
@@ -77,13 +103,10 @@ function sendCursorPointer(type, event) {
       ? "common"
       : "contact";
 
-  const nativeEvent = event?.nativeEvent || event;
+  const pointer = getCursorPointerSnapshot(event);
 
   /* 커스텀 커서는 마우스 입력에서만 부모 페이지로 전달합니다. */
-  if (
-    nativeEvent?.pointerType &&
-    nativeEvent.pointerType !== "mouse"
-  ) {
+  if (pointer.pointerType !== "mouse") {
     return;
   }
 
@@ -92,12 +115,12 @@ function sendCursorPointer(type, event) {
       channel: CURSOR_BRIDGE_CHANNEL,
       cursorMode,
       type,
-      x: nativeEvent?.clientX ?? 0,
-      y: nativeEvent?.clientY ?? 0,
-      pointerId: nativeEvent?.pointerId ?? 1,
-      pointerType: nativeEvent?.pointerType ?? "mouse",
-      button: nativeEvent?.button ?? 0,
-      buttons: nativeEvent?.buttons ?? 0,
+      x: pointer.clientX,
+      y: pointer.clientY,
+      pointerId: pointer.pointerId,
+      pointerType: pointer.pointerType,
+      button: pointer.button,
+      buttons: pointer.buttons,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
     },
@@ -153,24 +176,54 @@ export default function Lanyard({
    */
   useEffect(() => {
     const root = document.documentElement;
+    let cursorMoveFrame = 0;
+    let pendingCursorMove = null;
+
+    const cancelPendingCursorMove = () => {
+      if (cursorMoveFrame) {
+        window.cancelAnimationFrame(cursorMoveFrame);
+        cursorMoveFrame = 0;
+      }
+
+      pendingCursorMove = null;
+    };
+
+    const flushCursorMove = () => {
+      cursorMoveFrame = 0;
+
+      if (!pendingCursorMove) return;
+
+      const pointer = pendingCursorMove;
+      pendingCursorMove = null;
+      sendCursorPointer("move", pointer);
+    };
 
     const handleCursorMove = (event) => {
-      sendCursorPointer("move", event);
+      const pointer = getCursorPointerSnapshot(event);
+      if (pointer.pointerType !== "mouse") return;
+
+      /* 같은 화면 프레임 안에서는 가장 최신 마우스 좌표 하나만 보냅니다. */
+      pendingCursorMove = pointer;
+
+      if (!cursorMoveFrame) {
+        cursorMoveFrame = window.requestAnimationFrame(flushCursorMove);
+      }
     };
 
     const handleCursorDown = (event) => {
+      cancelPendingCursorMove();
       sendCursorPointer("down", event);
     };
 
     const handleCursorUp = (event) => {
+      cancelPendingCursorMove();
       sendCursorPointer("up", event);
     };
 
-    const handleCursorEnter = (event) => {
-      sendCursorPointer("move", event);
-    };
+    const handleCursorEnter = handleCursorMove;
 
     const handleCursorLeave = (event) => {
+      cancelPendingCursorMove();
       sendCursorPointer("leave", event);
     };
 
@@ -183,6 +236,7 @@ export default function Lanyard({
     window.addEventListener("blur", handleCursorLeave);
 
     return () => {
+      cancelPendingCursorMove();
       window.removeEventListener("pointermove", handleCursorMove, true);
       window.removeEventListener("pointerdown", handleCursorDown, true);
       window.removeEventListener("pointerup", handleCursorUp, true);
