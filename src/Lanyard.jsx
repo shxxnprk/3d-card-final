@@ -1,5 +1,5 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-NATIVE-CURSOR-BRIDGE-V6 / 2026-09-18
+// BUILD: LANYARD-DOM-CURSOR-BRIDGE-V7 / 2026-09-18
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, extend, useFrame } from "@react-three/fiber";
@@ -32,9 +32,7 @@ const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
 const CURSOR_BRIDGE_CHANNEL = "IMWEB_CURSOR_BRIDGE";
 const CURSOR_BRIDGE_QUERY = "imwebCursor";
 const CURSOR_BRIDGE_VALUE = "common";
-const MAX_DRAG_STEP = 0.3;
-const COMMON_NATIVE_CURSOR =
-  `url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='8'%20height='8'%20viewBox='0%200%208%208'%3E%3Crect%20width='8'%20height='8'%20fill='%23F8F9F6'/%3E%3C/svg%3E") 4 4, auto`;
+const MAX_DRAG_STEP = 1.2;
 
 let cachedParentOrigin;
 let cachedCursorMode;
@@ -129,7 +127,7 @@ function sendCursorPointer(type, event) {
     {
       channel: CURSOR_BRIDGE_CHANNEL,
       cursorMode,
-      cursorTransport: cursorMode === "common" ? "native-css" : "postmessage",
+      cursorTransport: cursorMode === "common" ? "iframe-dom" : "postmessage",
       type,
       x: pointer.clientX,
       y: pointer.clientY,
@@ -186,65 +184,129 @@ export default function Lanyard({
   }, []);
 
   /*
-   * About의 8px 공통 커서는 iframe 내부에서 네이티브 CSS 커서로 그립니다.
-   * pointermove 좌표를 부모로 보내지 않으므로 3D 렌더 프레임과 완전히 분리됩니다.
+   * About의 8px 공통 커서는 iframe 내부 DOM 합성 레이어에서 직접 그립니다.
+   * 브라우저 기본 커서와 postMessage 좌표 이동을 모두 사용하지 않습니다.
    * Contact는 기존 postMessage 좌표 브리지를 그대로 유지합니다.
    */
   useEffect(() => {
     const root = document.documentElement;
-    const usesNativeCommonCursor =
+    const usesIframeCommonCursor =
       getCursorMode() === "common" &&
-      window.matchMedia("(pointer: fine)").matches;
+      window.matchMedia("(any-pointer: fine)").matches;
 
-    if (usesNativeCommonCursor) {
-      const nativeCursorStyle = document.createElement("style");
-      let nativeCursorInside = false;
+    if (usesIframeCommonCursor) {
+      const cursorStyle = document.createElement("style");
+      const localCursor = document.createElement("div");
+      let cursorInside = false;
 
-      nativeCursorStyle.dataset.imwebNativeCursor = "v6";
-      nativeCursorStyle.textContent = `
-        @media (pointer: fine) {
+      cursorStyle.dataset.imwebIframeCursor = "v7";
+      cursorStyle.textContent = `
+        @media (any-pointer: fine) {
           html,
           body,
           body *,
-          .lanyard-wrapper,
-          .lanyard-wrapper * {
-            cursor: ${COMMON_NATIVE_CURSOR} !important;
+          body *::before,
+          body *::after,
+          canvas {
+            cursor: none !important;
           }
         }
       `;
-      document.head.appendChild(nativeCursorStyle);
+      document.head.appendChild(cursorStyle);
 
-      const handleNativeCursorEnter = (event) => {
-        if (nativeCursorInside) return;
-        nativeCursorInside = true;
+      localCursor.id = "imweb-iframe-common-cursor";
+      localCursor.setAttribute("aria-hidden", "true");
+      Object.assign(localCursor.style, {
+        position: "fixed",
+        left: "0",
+        top: "0",
+        width: "8px",
+        height: "8px",
+        background: "#F8F9F6",
+        borderRadius: "0",
+        pointerEvents: "none",
+        zIndex: "2147483647",
+        opacity: "0",
+        transform:
+          "translate3d(-100px, -100px, 0) translate3d(-50%, -50%, 0)",
+        transition: "none",
+        willChange: "transform",
+        backfaceVisibility: "hidden",
+        contain: "strict",
+      });
+      document.body.appendChild(localCursor);
+
+      const showLocalCursor = (event) => {
+        if (cursorInside) return;
+        cursorInside = true;
+        localCursor.style.opacity = "1";
         sendCursorPointer("enter", event);
       };
 
-      const handleNativeCursorMove = (event) => {
-        /* effect가 마우스 아래에서 마운트된 경우 최초 1회 진입을 보정합니다. */
-        if (!nativeCursorInside) {
-          handleNativeCursorEnter(event);
-        }
+      const moveLocalCursor = (event) => {
+        const pointer = getCursorPointerSnapshot(event);
+        if (pointer.pointerType && pointer.pointerType !== "mouse") return;
+
+        localCursor.style.transform =
+          `translate3d(${pointer.clientX}px, ${pointer.clientY}px, 0) ` +
+          "translate3d(-50%, -50%, 0)";
+        showLocalCursor(pointer);
       };
 
-      const handleNativeCursorClick = (event) => {
-        sendCursorPointer("click", event);
-      };
+      const hideLocalCursor = (event) => {
+        localCursor.style.opacity = "0";
+        localCursor.style.transform =
+          "translate3d(-100px, -100px, 0) translate3d(-50%, -50%, 0)";
 
-      const handleNativeCursorLeave = (event) => {
-        if (!nativeCursorInside) return;
-        nativeCursorInside = false;
+        if (!cursorInside) return;
+        cursorInside = false;
         sendCursorPointer("leave", event);
       };
 
-      root.addEventListener("pointerenter", handleNativeCursorEnter, true);
-      window.addEventListener("pointermove", handleNativeCursorMove, true);
-      window.addEventListener("click", handleNativeCursorClick, true);
-      root.addEventListener("pointerleave", handleNativeCursorLeave, true);
-      window.addEventListener("blur", handleNativeCursorLeave);
+      const handleLocalCursorClick = (event) => {
+        const pointer = getCursorPointerSnapshot(event);
+        if (pointer.pointerType && pointer.pointerType !== "mouse") return;
+        sendCursorPointer("click", pointer);
+      };
+
+      const applyLocalCursorConfig = (event) => {
+        const data = event.data;
+        if (
+          event.source !== window.parent ||
+          !data ||
+          data.channel !== CURSOR_BRIDGE_CHANNEL ||
+          data.type !== "config"
+        ) {
+          return;
+        }
+
+        const scaleX = Math.max(0.1, Number(data.scaleX) || 1);
+        const scaleY = Math.max(0.1, Number(data.scaleY) || 1);
+        localCursor.style.width = `${8 / scaleX}px`;
+        localCursor.style.height = `${8 / scaleY}px`;
+      };
+
+      /* 동기 transform 갱신으로 rAF/postMessage 한 프레임 지연을 만들지 않습니다. */
+      window.addEventListener("pointermove", moveLocalCursor, {
+        capture: true,
+        passive: true,
+      });
+      window.addEventListener("pointerdown", moveLocalCursor, {
+        capture: true,
+        passive: true,
+      });
+      window.addEventListener("click", handleLocalCursorClick, true);
+      window.addEventListener("message", applyLocalCursorConfig);
+      root.addEventListener("pointerleave", hideLocalCursor, true);
+      window.addEventListener("blur", hideLocalCursor);
+      sendCursorPointer("ready", {
+        clientX: 0,
+        clientY: 0,
+        pointerType: "mouse",
+      });
 
       return () => {
-        if (nativeCursorInside) {
+        if (cursorInside) {
           sendCursorPointer("leave", {
             clientX: 0,
             clientY: 0,
@@ -252,12 +314,14 @@ export default function Lanyard({
           });
         }
 
-        root.removeEventListener("pointerenter", handleNativeCursorEnter, true);
-        window.removeEventListener("pointermove", handleNativeCursorMove, true);
-        window.removeEventListener("click", handleNativeCursorClick, true);
-        root.removeEventListener("pointerleave", handleNativeCursorLeave, true);
-        window.removeEventListener("blur", handleNativeCursorLeave);
-        nativeCursorStyle.remove();
+        window.removeEventListener("pointermove", moveLocalCursor, true);
+        window.removeEventListener("pointerdown", moveLocalCursor, true);
+        window.removeEventListener("click", handleLocalCursorClick, true);
+        window.removeEventListener("message", applyLocalCursorConfig);
+        root.removeEventListener("pointerleave", hideLocalCursor, true);
+        window.removeEventListener("blur", hideLocalCursor);
+        localCursor.remove();
+        cursorStyle.remove();
       };
     }
 
@@ -446,8 +510,12 @@ export default function Lanyard({
       <Canvas
         style={{ touchAction: "none", cursor: "none" }}
         camera={{ position: position, fov: fov }}
-        dpr={[1, isMobile ? 1.5 : 2]}
-        gl={{ alpha: transparent }}
+        dpr={[1, isMobile ? 1.25 : 1.5]}
+        gl={{
+          alpha: transparent,
+          antialias: true,
+          powerPreference: "high-performance",
+        }}
         onCreated={({ gl }) =>
           gl.setClearColor(new THREE.Color(0x000000), transparent ? 0 : 1)
         }
@@ -676,17 +744,15 @@ function Band({
         dragTarget.copy(pointerWorld).sub(dragged);
         dragTarget.z = anchorPosition.z;
 
-        // Move in bounded steps rather than teleporting the card every frame.
-        // This keeps fast mouse/touch gestures stable at both 30 and 60 fps.
+        // Frame-rate independent smoothing keeps the card close to the pointer
+        // without feeding a large one-frame jump into the rope simulation.
         currentPosition.copy(card.current.translation());
         movement.copy(dragTarget).sub(currentPosition);
-        const maxStep = Math.min(
-          MAX_DRAG_STEP,
-          Math.max(0.08, delta * 10)
-        );
+        const follow = 1 - Math.exp(-28 * Math.min(delta, 0.05));
+        movement.multiplyScalar(follow);
 
-        if (movement.length() > maxStep) {
-          movement.setLength(maxStep);
+        if (movement.length() > MAX_DRAG_STEP) {
+          movement.setLength(MAX_DRAG_STEP);
         }
 
         currentPosition.add(movement);
