@@ -1,5 +1,5 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-DOM-CURSOR-BRIDGE-V7 / 2026-09-18
+// BUILD: LANYARD-NATIVE-ASSET-CURSOR-V8 / 2026-09-18
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, extend, useFrame } from "@react-three/fiber";
@@ -32,7 +32,7 @@ const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
 const CURSOR_BRIDGE_CHANNEL = "IMWEB_CURSOR_BRIDGE";
 const CURSOR_BRIDGE_QUERY = "imwebCursor";
 const CURSOR_BRIDGE_VALUE = "common";
-const MAX_DRAG_STEP = 1.2;
+const COMMON_CURSOR_ASSET = "/imweb-common-cursor.svg?v=8";
 
 let cachedParentOrigin;
 let cachedCursorMode;
@@ -127,7 +127,7 @@ function sendCursorPointer(type, event) {
     {
       channel: CURSOR_BRIDGE_CHANNEL,
       cursorMode,
-      cursorTransport: cursorMode === "common" ? "iframe-dom" : "postmessage",
+      cursorTransport: cursorMode === "common" ? "native-asset" : "postmessage",
       type,
       x: pointer.clientX,
       y: pointer.clientY,
@@ -184,22 +184,21 @@ export default function Lanyard({
   }, []);
 
   /*
-   * About의 8px 공통 커서는 iframe 내부 DOM 합성 레이어에서 직접 그립니다.
-   * 브라우저 기본 커서와 postMessage 좌표 이동을 모두 사용하지 않습니다.
+   * About는 같은 출처의 8px SVG를 브라우저 네이티브 커서로 사용합니다.
+   * JS 좌표 추적과 DOM 커서가 없으므로 WebGL 렌더링과 완전히 분리됩니다.
+   * 자산 로드 실패 시 fallback은 auto가 아니라 none이라 기본 화살표도 없습니다.
    * Contact는 기존 postMessage 좌표 브리지를 그대로 유지합니다.
    */
   useEffect(() => {
     const root = document.documentElement;
-    const usesIframeCommonCursor =
+    const usesNativeCommonCursor =
       getCursorMode() === "common" &&
       window.matchMedia("(any-pointer: fine)").matches;
 
-    if (usesIframeCommonCursor) {
+    if (usesNativeCommonCursor) {
       const cursorStyle = document.createElement("style");
-      const localCursor = document.createElement("div");
-      let cursorInside = false;
 
-      cursorStyle.dataset.imwebIframeCursor = "v7";
+      cursorStyle.dataset.imwebNativeAssetCursor = "v8";
       cursorStyle.textContent = `
         @media (any-pointer: fine) {
           html,
@@ -208,119 +207,22 @@ export default function Lanyard({
           body *::before,
           body *::after,
           canvas {
-            cursor: none !important;
+            cursor: url("${COMMON_CURSOR_ASSET}") 4 4, none !important;
           }
         }
       `;
       document.head.appendChild(cursorStyle);
 
-      localCursor.id = "imweb-iframe-common-cursor";
-      localCursor.setAttribute("aria-hidden", "true");
-      Object.assign(localCursor.style, {
-        position: "fixed",
-        left: "0",
-        top: "0",
-        width: "8px",
-        height: "8px",
-        background: "#F8F9F6",
-        borderRadius: "0",
-        pointerEvents: "none",
-        zIndex: "2147483647",
-        opacity: "0",
-        transform:
-          "translate3d(-100px, -100px, 0) translate3d(-50%, -50%, 0)",
-        transition: "none",
-        willChange: "transform",
-        backfaceVisibility: "hidden",
-        contain: "strict",
-      });
-      document.body.appendChild(localCursor);
-
-      const showLocalCursor = (event) => {
-        if (cursorInside) return;
-        cursorInside = true;
-        localCursor.style.opacity = "1";
-        sendCursorPointer("enter", event);
-      };
-
-      const moveLocalCursor = (event) => {
-        const pointer = getCursorPointerSnapshot(event);
-        if (pointer.pointerType && pointer.pointerType !== "mouse") return;
-
-        localCursor.style.transform =
-          `translate3d(${pointer.clientX}px, ${pointer.clientY}px, 0) ` +
-          "translate3d(-50%, -50%, 0)";
-        showLocalCursor(pointer);
-      };
-
-      const hideLocalCursor = (event) => {
-        localCursor.style.opacity = "0";
-        localCursor.style.transform =
-          "translate3d(-100px, -100px, 0) translate3d(-50%, -50%, 0)";
-
-        if (!cursorInside) return;
-        cursorInside = false;
-        sendCursorPointer("leave", event);
-      };
-
-      const handleLocalCursorClick = (event) => {
+      const handleNativeCursorClick = (event) => {
         const pointer = getCursorPointerSnapshot(event);
         if (pointer.pointerType && pointer.pointerType !== "mouse") return;
         sendCursorPointer("click", pointer);
       };
 
-      const applyLocalCursorConfig = (event) => {
-        const data = event.data;
-        if (
-          event.source !== window.parent ||
-          !data ||
-          data.channel !== CURSOR_BRIDGE_CHANNEL ||
-          data.type !== "config"
-        ) {
-          return;
-        }
-
-        const scaleX = Math.max(0.1, Number(data.scaleX) || 1);
-        const scaleY = Math.max(0.1, Number(data.scaleY) || 1);
-        localCursor.style.width = `${8 / scaleX}px`;
-        localCursor.style.height = `${8 / scaleY}px`;
-      };
-
-      /* 동기 transform 갱신으로 rAF/postMessage 한 프레임 지연을 만들지 않습니다. */
-      window.addEventListener("pointermove", moveLocalCursor, {
-        capture: true,
-        passive: true,
-      });
-      window.addEventListener("pointerdown", moveLocalCursor, {
-        capture: true,
-        passive: true,
-      });
-      window.addEventListener("click", handleLocalCursorClick, true);
-      window.addEventListener("message", applyLocalCursorConfig);
-      root.addEventListener("pointerleave", hideLocalCursor, true);
-      window.addEventListener("blur", hideLocalCursor);
-      sendCursorPointer("ready", {
-        clientX: 0,
-        clientY: 0,
-        pointerType: "mouse",
-      });
+      window.addEventListener("click", handleNativeCursorClick, true);
 
       return () => {
-        if (cursorInside) {
-          sendCursorPointer("leave", {
-            clientX: 0,
-            clientY: 0,
-            pointerType: "mouse",
-          });
-        }
-
-        window.removeEventListener("pointermove", moveLocalCursor, true);
-        window.removeEventListener("pointerdown", moveLocalCursor, true);
-        window.removeEventListener("click", handleLocalCursorClick, true);
-        window.removeEventListener("message", applyLocalCursorConfig);
-        root.removeEventListener("pointerleave", hideLocalCursor, true);
-        window.removeEventListener("blur", hideLocalCursor);
-        localCursor.remove();
+        window.removeEventListener("click", handleNativeCursorClick, true);
         cursorStyle.remove();
       };
     }
@@ -510,7 +412,7 @@ export default function Lanyard({
       <Canvas
         style={{ touchAction: "none", cursor: "none" }}
         camera={{ position: position, fov: fov }}
-        dpr={[1, isMobile ? 1.25 : 1.5]}
+        dpr={[1, isMobile ? 1 : 1.25]}
         gl={{
           alpha: transparent,
           antialias: true,
@@ -598,8 +500,6 @@ function Band({
   const pointerWorld = useMemo(() => new THREE.Vector3(), []);
   const dragTarget = useMemo(() => new THREE.Vector3(), []);
   const anchorPosition = useMemo(() => new THREE.Vector3(), []);
-  const currentPosition = useMemo(() => new THREE.Vector3(), []);
-  const movement = useMemo(() => new THREE.Vector3(), []);
   const segmentProps = {
     type: "dynamic",
     canSleep: true,
@@ -744,19 +644,13 @@ function Band({
         dragTarget.copy(pointerWorld).sub(dragged);
         dragTarget.z = anchorPosition.z;
 
-        // Frame-rate independent smoothing keeps the card close to the pointer
-        // without feeding a large one-frame jump into the rope simulation.
-        currentPosition.copy(card.current.translation());
-        movement.copy(dragTarget).sub(currentPosition);
-        const follow = 1 - Math.exp(-28 * Math.min(delta, 0.05));
-        movement.multiplyScalar(follow);
-
-        if (movement.length() > MAX_DRAG_STEP) {
-          movement.setLength(MAX_DRAG_STEP);
-        }
-
-        currentPosition.add(movement);
-        card.current.setNextKinematicTranslation(currentPosition);
+        // Kinematic target follows the pointer directly. The previous
+        // smoothing created visible drag latency and uneven catch-up motion.
+        card.current.setNextKinematicTranslation({
+          x: dragTarget.x,
+          y: dragTarget.y,
+          z: dragTarget.z,
+        });
       }
 
       [card, j1, j2, j3, fixed].forEach((ref) => ref.current?.wakeUp());
@@ -780,7 +674,7 @@ function Band({
       curve.points[1].copy(j2.current.lerped);
       curve.points[2].copy(j1.current.lerped);
       curve.points[3].copy(fixed.current.translation());
-      band.current.geometry.setPoints(curve.getPoints(isMobile ? 16 : 32));
+      band.current.geometry.setPoints(curve.getPoints(isMobile ? 16 : 24));
       ang.copy(card.current.angvel());
       rot.copy(card.current.rotation());
       card.current.setAngvel({ x: ang.x, y: ang.y - rot.y * 0.25, z: ang.z });
