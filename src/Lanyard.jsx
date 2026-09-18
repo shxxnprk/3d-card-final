@@ -1,8 +1,8 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-NATIVE-ASSET-CURSOR-V9 / 2026-09-18
+// BUILD: LANYARD-WINDOW-CURSOR-BRIDGE-V4 / 2026-09-17
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, extend, useFrame, useThree } from "@react-three/fiber";
+import { Canvas, extend, useFrame } from "@react-three/fiber";
 import {
   useGLTF,
   useTexture,
@@ -32,57 +32,16 @@ const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
 const CURSOR_BRIDGE_CHANNEL = "IMWEB_CURSOR_BRIDGE";
 const CURSOR_BRIDGE_QUERY = "imwebCursor";
 const CURSOR_BRIDGE_VALUE = "common";
-const COMMON_CURSOR_ASSET = "/imweb-common-cursor.png?v=9";
-
-let cachedParentOrigin;
-let cachedCursorMode;
+const MAX_DRAG_STEP = 0.3;
 
 function getParentOrigin() {
-  if (cachedParentOrigin !== undefined) return cachedParentOrigin;
-
   if (typeof document === "undefined" || !document.referrer) return "*";
 
   try {
-    cachedParentOrigin = new URL(document.referrer).origin;
+    return new URL(document.referrer).origin;
   } catch {
-    cachedParentOrigin = "*";
+    return "*";
   }
-
-  return cachedParentOrigin;
-}
-
-function getCursorMode() {
-  if (cachedCursorMode !== undefined) return cachedCursorMode;
-
-  cachedCursorMode =
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get(CURSOR_BRIDGE_QUERY) ===
-      CURSOR_BRIDGE_VALUE
-      ? "common"
-      : "contact";
-
-  return cachedCursorMode;
-}
-
-function getCursorPointerSnapshot(event) {
-  const nativeEvent = event?.nativeEvent || event;
-  let sample = nativeEvent;
-
-  if (typeof nativeEvent?.getCoalescedEvents === "function") {
-    const coalescedEvents = nativeEvent.getCoalescedEvents();
-    if (coalescedEvents.length) {
-      sample = coalescedEvents[coalescedEvents.length - 1];
-    }
-  }
-
-  return {
-    clientX: sample?.clientX ?? nativeEvent?.clientX ?? 0,
-    clientY: sample?.clientY ?? nativeEvent?.clientY ?? 0,
-    pointerId: sample?.pointerId ?? nativeEvent?.pointerId ?? 1,
-    pointerType: sample?.pointerType ?? nativeEvent?.pointerType ?? "mouse",
-    button: sample?.button ?? nativeEvent?.button ?? 0,
-    buttons: sample?.buttons ?? nativeEvent?.buttons ?? 0,
-  };
 }
 
 function sendKeywordPointer(type, event) {
@@ -112,13 +71,18 @@ function sendCursorPointer(type, event) {
    * About는 ?imwebCursor=common으로 공통 커서 모드를 사용합니다.
    * 쿼리가 없는 기존 Contact iframe은 contact 모드로 유지됩니다.
    */
-  const cursorMode = getCursorMode();
-  const pointer = getCursorPointerSnapshot(event);
+  const cursorMode =
+    new URLSearchParams(window.location.search).get(CURSOR_BRIDGE_QUERY) ===
+    CURSOR_BRIDGE_VALUE
+      ? "common"
+      : "contact";
+
+  const nativeEvent = event?.nativeEvent || event;
 
   /* 커스텀 커서는 마우스 입력에서만 부모 페이지로 전달합니다. */
   if (
-    pointer.pointerType &&
-    pointer.pointerType !== "mouse"
+    nativeEvent?.pointerType &&
+    nativeEvent.pointerType !== "mouse"
   ) {
     return;
   }
@@ -127,14 +91,13 @@ function sendCursorPointer(type, event) {
     {
       channel: CURSOR_BRIDGE_CHANNEL,
       cursorMode,
-      cursorTransport: cursorMode === "common" ? "native-asset" : "postmessage",
       type,
-      x: pointer.clientX,
-      y: pointer.clientY,
-      pointerId: pointer.pointerId,
-      pointerType: pointer.pointerType,
-      button: pointer.button,
-      buttons: pointer.buttons,
+      x: nativeEvent?.clientX ?? 0,
+      y: nativeEvent?.clientY ?? 0,
+      pointerId: nativeEvent?.pointerId ?? 1,
+      pointerType: nativeEvent?.pointerType ?? "mouse",
+      button: nativeEvent?.button ?? 0,
+      buttons: nativeEvent?.buttons ?? 0,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
     },
@@ -155,17 +118,6 @@ const BLANK_PIXEL =
 const FRONT_UV_RECT = { x: 0, y: 0, w: 0.5, h: 0.755 };
 const BACK_UV_RECT = { x: 0.5, y: 0, w: 0.5, h: 0.757 };
 
-function CameraZoom({ zoom }) {
-  const camera = useThree((state) => state.camera);
-
-  useEffect(() => {
-    camera.zoom = zoom;
-    camera.updateProjectionMatrix();
-  }, [camera, zoom]);
-
-  return null;
-}
-
 export default function Lanyard({
   position = [0, 0, 30],
   gravity = [0, -40, 0],
@@ -184,140 +136,41 @@ export default function Lanyard({
     keywordPointerId: null,
   });
 
-  const [viewport, setViewport] = useState(() => ({
-    width: typeof window !== "undefined" ? window.innerWidth : 1200,
-    height: typeof window !== "undefined" ? window.innerHeight : 800,
-  }));
-  const isMobile = viewport.width < 768;
-  const isPortraitTablet =
-    viewport.width >= 768 &&
-    viewport.width < 1200 &&
-    viewport.height > viewport.width;
-  const sceneZoom = isMobile || isPortraitTablet
-    ? 1.2
-    : viewport.width < 1200
-      ? 1.3
-      : 1.34;
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 768
+  );
 
   useEffect(() => {
-    const handleResize = () => {
-      setViewport({
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
-    };
-
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   /*
-   * About는 같은 출처의 8px SVG를 브라우저 네이티브 커서로 사용합니다.
-   * JS 좌표 추적과 DOM 커서가 없으므로 WebGL 렌더링과 완전히 분리됩니다.
-   * 자산 로드 실패 시 fallback은 auto가 아니라 none이라 기본 화살표도 없습니다.
-   * Contact는 기존 postMessage 좌표 브리지를 그대로 유지합니다.
+   * Canvas/R3F가 이벤트 전파를 처리하더라도 커서 좌표가 끊기지 않도록
+   * iframe window의 capture 단계에서 커서 이벤트를 수집합니다.
+   * Contact와 About은 같은 메시지를 받고 부모 페이지에서 각자 커서를 선택합니다.
    */
   useEffect(() => {
     const root = document.documentElement;
-    const usesNativeCommonCursor =
-      getCursorMode() === "common" &&
-      window.matchMedia("(any-pointer: fine)").matches;
-
-    if (usesNativeCommonCursor) {
-      const cursorStyle = document.createElement("style");
-
-      cursorStyle.dataset.imwebNativeAssetCursor = "v8";
-      cursorStyle.textContent = `
-        @media (any-pointer: fine) {
-          html,
-          body,
-          body *,
-          body *::before,
-          body *::after,
-          canvas {
-            cursor: url("${COMMON_CURSOR_ASSET}") 4 4, none !important;
-          }
-        }
-      `;
-      document.head.appendChild(cursorStyle);
-
-      const handleNativeCursorClick = (event) => {
-        const pointer = getCursorPointerSnapshot(event);
-        if (pointer.pointerType && pointer.pointerType !== "mouse") return;
-        sendCursorPointer("click", pointer);
-      };
-
-      window.addEventListener("click", handleNativeCursorClick, true);
-
-      return () => {
-        window.removeEventListener("click", handleNativeCursorClick, true);
-        cursorStyle.remove();
-      };
-    }
-
-    let cursorMoveFrame = 0;
-    let pendingCursorMove = null;
-
-    const cancelPendingCursorMove = () => {
-      if (cursorMoveFrame) {
-        window.cancelAnimationFrame(cursorMoveFrame);
-        cursorMoveFrame = 0;
-      }
-
-      pendingCursorMove = null;
-    };
-
-    const flushCursorMove = () => {
-      cursorMoveFrame = 0;
-
-      if (!pendingCursorMove) return;
-
-      const pointer = pendingCursorMove;
-      pendingCursorMove = null;
-      sendCursorPointer("move", pointer);
-    };
-
-    const queueCursorMove = (event) => {
-      const pointer = getCursorPointerSnapshot(event);
-      if (pointer.pointerType !== "mouse") return;
-
-      /*
-       * 고주사율 마우스의 수백 개 pointermove를 그대로 postMessage하지 않고
-       * 현재 화면 프레임에 필요한 가장 최신 좌표 하나만 부모로 보냅니다.
-       */
-      pendingCursorMove = pointer;
-
-      if (!cursorMoveFrame) {
-        cursorMoveFrame = window.requestAnimationFrame(flushCursorMove);
-      }
-    };
-
-    const sendCursorImmediately = (type, event) => {
-      const pointer = getCursorPointerSnapshot(event);
-      if (pointer.pointerType !== "mouse") return;
-
-      cancelPendingCursorMove();
-      sendCursorPointer(type, pointer);
-    };
 
     const handleCursorMove = (event) => {
-      queueCursorMove(event);
+      sendCursorPointer("move", event);
     };
 
     const handleCursorDown = (event) => {
-      sendCursorImmediately("down", event);
+      sendCursorPointer("down", event);
     };
 
     const handleCursorUp = (event) => {
-      sendCursorImmediately("up", event);
+      sendCursorPointer("up", event);
     };
 
     const handleCursorEnter = (event) => {
-      queueCursorMove(event);
+      sendCursorPointer("move", event);
     };
 
     const handleCursorLeave = (event) => {
-      cancelPendingCursorMove();
       sendCursorPointer("leave", event);
     };
 
@@ -330,7 +183,6 @@ export default function Lanyard({
     window.addEventListener("blur", handleCursorLeave);
 
     return () => {
-      cancelPendingCursorMove();
       window.removeEventListener("pointermove", handleCursorMove, true);
       window.removeEventListener("pointerdown", handleCursorDown, true);
       window.removeEventListener("pointerup", handleCursorUp, true);
@@ -439,18 +291,13 @@ export default function Lanyard({
     >
       <Canvas
         style={{ touchAction: "none", cursor: "none" }}
-        camera={{ position: position, fov: fov, zoom: sceneZoom }}
-        dpr={[1, isMobile ? 1 : 1.15]}
-        gl={{
-          alpha: transparent,
-          antialias: true,
-          powerPreference: "high-performance",
-        }}
+        camera={{ position: position, fov: fov }}
+        dpr={[1, isMobile ? 1.5 : 2]}
+        gl={{ alpha: transparent }}
         onCreated={({ gl }) =>
           gl.setClearColor(new THREE.Color(0x000000), transparent ? 0 : 1)
         }
       >
-        <CameraZoom zoom={sceneZoom} />
         <ambientLight intensity={Math.PI} />
         <Physics gravity={gravity} timeStep={1 / 60}>
           <Band
@@ -529,12 +376,14 @@ function Band({
   const pointerWorld = useMemo(() => new THREE.Vector3(), []);
   const dragTarget = useMemo(() => new THREE.Vector3(), []);
   const anchorPosition = useMemo(() => new THREE.Vector3(), []);
+  const currentPosition = useMemo(() => new THREE.Vector3(), []);
+  const movement = useMemo(() => new THREE.Vector3(), []);
   const segmentProps = {
     type: "dynamic",
     canSleep: true,
     colliders: false,
-    ccd: false,
-    additionalSolverIterations: 2,
+    ccd: true,
+    additionalSolverIterations: 4,
     angularDamping: 4,
     linearDamping: 4,
   };
@@ -673,13 +522,21 @@ function Band({
         dragTarget.copy(pointerWorld).sub(dragged);
         dragTarget.z = anchorPosition.z;
 
-        // Kinematic target follows the pointer directly. The previous
-        // smoothing created visible drag latency and uneven catch-up motion.
-        card.current.setNextKinematicTranslation({
-          x: dragTarget.x,
-          y: dragTarget.y,
-          z: dragTarget.z,
-        });
+        // Move in bounded steps rather than teleporting the card every frame.
+        // This keeps fast mouse/touch gestures stable at both 30 and 60 fps.
+        currentPosition.copy(card.current.translation());
+        movement.copy(dragTarget).sub(currentPosition);
+        const maxStep = Math.min(
+          MAX_DRAG_STEP,
+          Math.max(0.08, delta * 10)
+        );
+
+        if (movement.length() > maxStep) {
+          movement.setLength(maxStep);
+        }
+
+        currentPosition.add(movement);
+        card.current.setNextKinematicTranslation(currentPosition);
       }
 
       [card, j1, j2, j3, fixed].forEach((ref) => ref.current?.wakeUp());
@@ -703,7 +560,7 @@ function Band({
       curve.points[1].copy(j2.current.lerped);
       curve.points[2].copy(j1.current.lerped);
       curve.points[3].copy(fixed.current.translation());
-      band.current.geometry.setPoints(curve.getPoints(isMobile ? 16 : 24));
+      band.current.geometry.setPoints(curve.getPoints(isMobile ? 16 : 32));
       ang.copy(card.current.angvel());
       rot.copy(card.current.rotation());
       card.current.setAngvel({ x: ang.x, y: ang.y - rot.y * 0.25, z: ang.z });
