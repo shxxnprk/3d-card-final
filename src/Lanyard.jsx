@@ -1,8 +1,8 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-NATIVE-ASSET-CURSOR-V8 / 2026-09-18
+// BUILD: LANYARD-NATIVE-ASSET-CURSOR-V9 / 2026-09-18
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, extend, useFrame } from "@react-three/fiber";
+import { Canvas, extend, useFrame, useThree } from "@react-three/fiber";
 import {
   useGLTF,
   useTexture,
@@ -32,7 +32,7 @@ const KEYWORD_BRIDGE_CHANNEL = "IMWEB_KEYWORD_BRIDGE";
 const CURSOR_BRIDGE_CHANNEL = "IMWEB_CURSOR_BRIDGE";
 const CURSOR_BRIDGE_QUERY = "imwebCursor";
 const CURSOR_BRIDGE_VALUE = "common";
-const COMMON_CURSOR_ASSET = "/imweb-common-cursor.svg?v=8";
+const COMMON_CURSOR_ASSET = "/imweb-common-cursor.png?v=9";
 
 let cachedParentOrigin;
 let cachedCursorMode;
@@ -155,6 +155,17 @@ const BLANK_PIXEL =
 const FRONT_UV_RECT = { x: 0, y: 0, w: 0.5, h: 0.755 };
 const BACK_UV_RECT = { x: 0.5, y: 0, w: 0.5, h: 0.757 };
 
+function CameraZoom({ zoom }) {
+  const camera = useThree((state) => state.camera);
+
+  useEffect(() => {
+    camera.zoom = zoom;
+    camera.updateProjectionMatrix();
+  }, [camera, zoom]);
+
+  return null;
+}
+
 export default function Lanyard({
   position = [0, 0, 30],
   gravity = [0, -40, 0],
@@ -173,12 +184,29 @@ export default function Lanyard({
     keywordPointerId: null,
   });
 
-  const [isMobile, setIsMobile] = useState(
-    () => typeof window !== "undefined" && window.innerWidth < 768
-  );
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window !== "undefined" ? window.innerWidth : 1200,
+    height: typeof window !== "undefined" ? window.innerHeight : 800,
+  }));
+  const isMobile = viewport.width < 768;
+  const isPortraitTablet =
+    viewport.width >= 768 &&
+    viewport.width < 1200 &&
+    viewport.height > viewport.width;
+  const sceneZoom = isMobile || isPortraitTablet
+    ? 1.2
+    : viewport.width < 1200
+      ? 1.3
+      : 1.34;
 
   useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    const handleResize = () => {
+      setViewport({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    };
+
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
@@ -411,8 +439,8 @@ export default function Lanyard({
     >
       <Canvas
         style={{ touchAction: "none", cursor: "none" }}
-        camera={{ position: position, fov: fov }}
-        dpr={[1, isMobile ? 1 : 1.25]}
+        camera={{ position: position, fov: fov, zoom: sceneZoom }}
+        dpr={[1, isMobile ? 1 : 1.15]}
         gl={{
           alpha: transparent,
           antialias: true,
@@ -422,6 +450,7 @@ export default function Lanyard({
           gl.setClearColor(new THREE.Color(0x000000), transparent ? 0 : 1)
         }
       >
+        <CameraZoom zoom={sceneZoom} />
         <ambientLight intensity={Math.PI} />
         <Physics gravity={gravity} timeStep={1 / 60}>
           <Band
@@ -504,8 +533,8 @@ function Band({
     type: "dynamic",
     canSleep: true,
     colliders: false,
-    ccd: true,
-    additionalSolverIterations: 4,
+    ccd: false,
+    additionalSolverIterations: 2,
     angularDamping: 4,
     linearDamping: 4,
   };
