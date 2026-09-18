@@ -1,5 +1,5 @@
 /* eslint-disable react/no-unknown-property */
-// BUILD: LANYARD-WINDOW-CURSOR-BRIDGE-V5 / 2026-09-18
+// BUILD: LANYARD-NATIVE-CURSOR-BRIDGE-V6 / 2026-09-18
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, extend, useFrame } from "@react-three/fiber";
@@ -33,6 +33,8 @@ const CURSOR_BRIDGE_CHANNEL = "IMWEB_CURSOR_BRIDGE";
 const CURSOR_BRIDGE_QUERY = "imwebCursor";
 const CURSOR_BRIDGE_VALUE = "common";
 const MAX_DRAG_STEP = 0.3;
+const COMMON_NATIVE_CURSOR =
+  `url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='8'%20height='8'%20viewBox='0%200%208%208'%3E%3Crect%20width='8'%20height='8'%20fill='%23F8F9F6'/%3E%3C/svg%3E") 4 4, auto`;
 
 let cachedParentOrigin;
 let cachedCursorMode;
@@ -127,6 +129,7 @@ function sendCursorPointer(type, event) {
     {
       channel: CURSOR_BRIDGE_CHANNEL,
       cursorMode,
+      cursorTransport: cursorMode === "common" ? "native-css" : "postmessage",
       type,
       x: pointer.clientX,
       y: pointer.clientY,
@@ -183,12 +186,81 @@ export default function Lanyard({
   }, []);
 
   /*
-   * Canvas/R3F가 이벤트 전파를 처리하더라도 커서 좌표가 끊기지 않도록
-   * iframe window의 capture 단계에서 커서 이벤트를 수집합니다.
-   * Contact와 About은 같은 메시지를 받고 부모 페이지에서 각자 커서를 선택합니다.
+   * About의 8px 공통 커서는 iframe 내부에서 네이티브 CSS 커서로 그립니다.
+   * pointermove 좌표를 부모로 보내지 않으므로 3D 렌더 프레임과 완전히 분리됩니다.
+   * Contact는 기존 postMessage 좌표 브리지를 그대로 유지합니다.
    */
   useEffect(() => {
     const root = document.documentElement;
+    const usesNativeCommonCursor =
+      getCursorMode() === "common" &&
+      window.matchMedia("(pointer: fine)").matches;
+
+    if (usesNativeCommonCursor) {
+      const nativeCursorStyle = document.createElement("style");
+      let nativeCursorInside = false;
+
+      nativeCursorStyle.dataset.imwebNativeCursor = "v6";
+      nativeCursorStyle.textContent = `
+        @media (pointer: fine) {
+          html,
+          body,
+          body *,
+          .lanyard-wrapper,
+          .lanyard-wrapper * {
+            cursor: ${COMMON_NATIVE_CURSOR} !important;
+          }
+        }
+      `;
+      document.head.appendChild(nativeCursorStyle);
+
+      const handleNativeCursorEnter = (event) => {
+        if (nativeCursorInside) return;
+        nativeCursorInside = true;
+        sendCursorPointer("enter", event);
+      };
+
+      const handleNativeCursorMove = (event) => {
+        /* effect가 마우스 아래에서 마운트된 경우 최초 1회 진입을 보정합니다. */
+        if (!nativeCursorInside) {
+          handleNativeCursorEnter(event);
+        }
+      };
+
+      const handleNativeCursorClick = (event) => {
+        sendCursorPointer("click", event);
+      };
+
+      const handleNativeCursorLeave = (event) => {
+        if (!nativeCursorInside) return;
+        nativeCursorInside = false;
+        sendCursorPointer("leave", event);
+      };
+
+      root.addEventListener("pointerenter", handleNativeCursorEnter, true);
+      window.addEventListener("pointermove", handleNativeCursorMove, true);
+      window.addEventListener("click", handleNativeCursorClick, true);
+      root.addEventListener("pointerleave", handleNativeCursorLeave, true);
+      window.addEventListener("blur", handleNativeCursorLeave);
+
+      return () => {
+        if (nativeCursorInside) {
+          sendCursorPointer("leave", {
+            clientX: 0,
+            clientY: 0,
+            pointerType: "mouse",
+          });
+        }
+
+        root.removeEventListener("pointerenter", handleNativeCursorEnter, true);
+        window.removeEventListener("pointermove", handleNativeCursorMove, true);
+        window.removeEventListener("click", handleNativeCursorClick, true);
+        root.removeEventListener("pointerleave", handleNativeCursorLeave, true);
+        window.removeEventListener("blur", handleNativeCursorLeave);
+        nativeCursorStyle.remove();
+      };
+    }
+
     let cursorMoveFrame = 0;
     let pendingCursorMove = null;
 
